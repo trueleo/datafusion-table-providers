@@ -43,6 +43,8 @@
 //! ```
 
 pub mod arrow;
+#[cfg(feature = "clickhouse")]
+pub mod clickhouse;
 #[cfg(feature = "mysql")]
 pub mod mysql;
 #[cfg(feature = "postgres")]

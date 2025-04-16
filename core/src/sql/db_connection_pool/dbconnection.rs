@@ -5,6 +5,8 @@ use datafusion::{
 };
 use snafu::prelude::*;
 
+#[cfg(feature = "clickhouse")]
+pub mod clickhouse;
 #[cfg(feature = "duckdb")]
 pub mod duckdbconn;
 #[cfg(feature = "mysql")]
