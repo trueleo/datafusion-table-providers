@@ -5,6 +5,8 @@ use datafusion::{
 };
 use snafu::prelude::*;
 
+#[cfg(feature = "clickhouse")]
+pub mod clickhouseconn;
 #[cfg(feature = "duckdb")]
 pub mod duckdbconn;
 #[cfg(feature = "mysql")]
@@ -158,6 +160,24 @@ pub trait DbConnection<T, P>: Send {
     }
 }
 
+impl<T, P> DbConnection<T, P> for Box<dyn DbConnection<T, P>> {
+    fn as_any(&self) -> &dyn Any {
+        (**self).as_any()
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        (**self).as_any_mut()
+    }
+
+    fn as_sync(&self) -> Option<&dyn SyncDbConnection<T, P>> {
+        (**self).as_sync()
+    }
+
+    fn as_async(&self) -> Option<&dyn AsyncDbConnection<T, P>> {
+        (**self).as_async()
+    }
+}
+
 pub async fn get_tables<T, P>(
     conn: Box<dyn DbConnection<T, P>>,
     schema: &str,
@@ -199,7 +219,7 @@ pub async fn get_schemas<T, P>(conn: Box<dyn DbConnection<T, P>>) -> Result<Vec<
 ///
 /// Returns an error if the schema cannot be retrieved.
 pub async fn get_schema<T, P>(
-    conn: Box<dyn DbConnection<T, P>>,
+    conn: impl DbConnection<T, P>,
     table_reference: &datafusion::sql::TableReference,
 ) -> Result<Arc<datafusion::arrow::datatypes::Schema>, Error> {
     let schema = if let Some(conn) = conn.as_sync() {
@@ -223,7 +243,7 @@ pub async fn get_schema<T, P>(
 ///
 /// Returns an error if the query fails.
 pub async fn query_arrow<T, P>(
-    conn: Box<dyn DbConnection<T, P>>,
+    conn: impl DbConnection<T, P>,
     sql: String,
     projected_schema: Option<SchemaRef>,
 ) -> Result<SendableRecordBatchStream, Error> {

@@ -13,7 +13,10 @@ use async_trait::async_trait;
 use datafusion::{
     catalog::Session,
     physical_plan::execution_plan::{Boundedness, EmissionType},
-    sql::unparser::dialect::{DefaultDialect, Dialect},
+    sql::unparser::{
+        self,
+        dialect::{DefaultDialect, Dialect},
+    },
 };
 use futures::TryStreamExt;
 use snafu::prelude::*;
@@ -40,7 +43,7 @@ use datafusion::{
     sql::{unparser::Unparser, TableReference},
 };
 
-mod expr;
+pub mod expr;
 #[cfg(feature = "federation")]
 pub mod federation;
 
@@ -201,19 +204,7 @@ impl<T, P> TableProvider for SqlTable<T, P> {
         &self,
         filters: &[&Expr],
     ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        let filter_push_down: Vec<TableProviderFilterPushDown> = filters
-            .iter()
-            .map(|f| match Unparser::new(self.dialect()).expr_to_sql(f) {
-                // The DataFusion unparser currently does not correctly handle unparsing subquery expressions on TableScan filters.
-                Ok(_) => match expr::expr_contains_subquery(f) {
-                    Ok(true) => TableProviderFilterPushDown::Unsupported,
-                    Ok(false) => TableProviderFilterPushDown::Exact,
-                    Err(_) => TableProviderFilterPushDown::Unsupported,
-                },
-                Err(_) => TableProviderFilterPushDown::Unsupported,
-            })
-            .collect();
-
+        let filter_push_down = default_supported_filters(filters, self.dialect());
         Ok(filter_push_down)
     }
 
@@ -227,6 +218,24 @@ impl<T, P> TableProvider for SqlTable<T, P> {
         let sql = self.scan_to_sql(projection, filters, limit)?;
         return self.create_physical_plan(projection, sql);
     }
+}
+
+pub fn default_supported_filters(
+    filters: &[&Expr],
+    dialect: &dyn unparser::dialect::Dialect,
+) -> Vec<TableProviderFilterPushDown> {
+    filters
+        .iter()
+        .map(|f| match Unparser::new(dialect).expr_to_sql(f) {
+            // The DataFusion unparser currently does not correctly handle unparsing subquery expressions on TableScan filters.
+            Ok(_) => match expr::expr_contains_subquery(f) {
+                Ok(true) => TableProviderFilterPushDown::Unsupported,
+                Ok(false) => TableProviderFilterPushDown::Exact,
+                Err(_) => TableProviderFilterPushDown::Unsupported,
+            },
+            Err(_) => TableProviderFilterPushDown::Unsupported,
+        })
+        .collect()
 }
 
 impl<T, P> Display for SqlTable<T, P> {
@@ -347,11 +356,8 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
     ) -> DataFusionResult<SendableRecordBatchStream> {
         let sql = self.sql().map_err(to_execution_error)?;
         tracing::debug!("SqlExec sql: {sql}");
-
         let schema = self.schema();
-
         let fut = get_stream(Arc::clone(&self.pool), sql, Arc::clone(&schema));
-
         let stream = futures::stream::once(fut).try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
@@ -363,7 +369,6 @@ pub async fn get_stream<T: 'static, P: 'static>(
     projected_schema: SchemaRef,
 ) -> DataFusionResult<SendableRecordBatchStream> {
     let conn = pool.connect().await.map_err(to_execution_error)?;
-
     query_arrow(conn, sql, Some(projected_schema))
         .await
         .map_err(to_execution_error)

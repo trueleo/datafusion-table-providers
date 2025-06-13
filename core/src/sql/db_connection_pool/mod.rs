@@ -3,6 +3,9 @@ use dbconnection::DbConnection;
 use std::sync::Arc;
 
 pub mod dbconnection;
+
+#[cfg(feature = "clickhouse")]
+pub mod clickhousepool;
 #[cfg(feature = "duckdb")]
 pub mod duckdbpool;
 #[cfg(feature = "mysql")]
@@ -32,7 +35,6 @@ pub enum JoinPushDown {
 #[async_trait]
 pub trait DbConnectionPool<T, P: 'static> {
     async fn connect(&self) -> Result<Box<dyn DbConnection<T, P>>>;
-
     fn join_push_down(&self) -> JoinPushDown;
 }
 

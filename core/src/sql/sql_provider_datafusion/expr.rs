@@ -4,7 +4,7 @@ use datafusion::{
     logical_expr::Expr,
 };
 
-pub(super) fn expr_contains_subquery(expr: &Expr) -> Result<bool> {
+pub fn expr_contains_subquery(expr: &Expr) -> Result<bool> {
     let mut contains_subquery = false;
     expr.apply(|expr| match expr {
         Expr::ScalarSubquery(_) | Expr::InSubquery(_) | Expr::Exists(_) => {

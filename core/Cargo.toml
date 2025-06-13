@@ -1,6 +1,6 @@
 [package]
 name = "datafusion-table-providers"
-version = { workspace = true} 
+version = { workspace = true }
 readme = { workspace = true }
 edition = { workspace = true }
 repository = { workspace = true }
@@ -9,6 +9,7 @@ description = { workspace = true }
 
 [dependencies]
 arrow = { workspace = true }
+arrow-ipc = { workspace = true, optional = true }
 arrow-array = { workspace = true, optional = true }
 arrow-flight = { workspace = true, optional = true, features = [
   "flight-sql-experimental",
@@ -27,6 +28,7 @@ byteorder = "1.5.0"
 bytes = { version = "1.7.1", optional = true }
 byte-unit = { version = "5.1.4", optional = true }
 chrono = "0.4"
+clickhouse = { version = "*", optional = true }
 dashmap = "6.1.0"
 datafusion = { workspace = true, default-features = false }
 datafusion-expr = { workspace = true, optional = true }
@@ -112,6 +114,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tempfile = "3.20.0"
 
 [features]
+clickhouse = ["dep:clickhouse", "arrow-ipc/lz4", "dep:async-stream"]
+clickhouse-federation = ["clickhouse", "federation"]
 duckdb = [
   "dep:duckdb",
   "dep:r2d2",
@@ -164,3 +168,8 @@ required-features = ["flight"]
 name = "sqlite"
 path = "examples/sqlite.rs"
 required-features = ["sqlite"]
+
+[[example]]
+name = "clickhouse"
+path = "examples/clickhouse.rs"
+required-features = ["clickhouse"]
