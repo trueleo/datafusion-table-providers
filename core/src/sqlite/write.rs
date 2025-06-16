@@ -130,13 +130,11 @@ impl DataSink for SqliteDataSink {
         let (notify_commit_transaction, mut on_commit_transaction) =
             tokio::sync::oneshot::channel();
 
-        let mut db_conn = self
+        let sqlite_conn = self
             .sqlite
             .connect()
             .await
             .map_err(to_retriable_data_write_error)?;
-        let sqlite_conn =
-            Sqlite::sqlite_conn(&mut db_conn).map_err(to_retriable_data_write_error)?;
 
         let constraints = self.sqlite.constraints().clone();
         let mut data = data;

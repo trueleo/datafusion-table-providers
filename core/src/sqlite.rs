@@ -1,5 +1,5 @@
 use crate::sql::arrow_sql_gen::statement::{CreateTableBuilder, IndexBuilder, InsertBuilder};
-use crate::sql::db_connection_pool::dbconnection::{self, get_schema, AsyncDbConnection};
+use crate::sql::db_connection_pool::dbconnection::{self, get_schema};
 use crate::sql::db_connection_pool::sqlitepool::SqliteConnectionPoolFactory;
 use crate::sql::db_connection_pool::DbInstanceKey;
 use crate::sql::db_connection_pool::{
@@ -24,14 +24,13 @@ use datafusion::{
     sql::TableReference,
 };
 use futures::TryStreamExt;
-use rusqlite::{ToSql, Transaction};
+use rusqlite::Transaction;
 use snafu::prelude::*;
 use sql_table::SQLiteTable;
 use std::collections::HashSet;
 use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
-use tokio_rusqlite::Connection;
 
 use crate::util::{
     self,
@@ -215,9 +214,6 @@ impl Default for SqliteTableProviderFactory {
     }
 }
 
-pub type DynSqliteConnectionPool =
-    dyn DbConnectionPool<Connection, &'static (dyn ToSql + Sync)> + Send + Sync;
-
 #[async_trait]
 impl TableProviderFactory for SqliteTableProviderFactory {
     #[allow(clippy::too_many_lines)]
@@ -309,12 +305,11 @@ impl TableProviderFactory for SqliteTableProviderFactory {
             cmd.constraints.clone(),
         ));
 
-        let mut db_conn = sqlite.connect().await.map_err(to_datafusion_error)?;
-        let sqlite_conn = Sqlite::sqlite_conn(&mut db_conn).map_err(to_datafusion_error)?;
+        let mut sqlite_conn = sqlite.connect().await.map_err(to_datafusion_error)?;
 
         let primary_keys = get_primary_keys_from_constraints(&cmd.constraints, &schema);
 
-        let table_exists = sqlite.table_exists(sqlite_conn).await;
+        let table_exists = sqlite.table_exists(&mut sqlite_conn).await;
         if !table_exists {
             let sqlite_in_conn = Arc::clone(&sqlite);
             sqlite_conn
@@ -338,9 +333,11 @@ impl TableProviderFactory for SqliteTableProviderFactory {
         } else {
             let mut table_definition_matches = true;
 
-            table_definition_matches &= sqlite.verify_indexes_match(sqlite_conn, &indexes).await?;
             table_definition_matches &= sqlite
-                .verify_primary_keys_match(sqlite_conn, &primary_keys)
+                .verify_indexes_match(&mut sqlite_conn, &indexes)
+                .await?;
+            table_definition_matches &= sqlite
+                .verify_primary_keys_match(&mut sqlite_conn, &primary_keys)
                 .await?;
 
             if !table_definition_matches {
@@ -351,10 +348,8 @@ impl TableProviderFactory for SqliteTableProviderFactory {
             }
         }
 
-        let dyn_pool: Arc<DynSqliteConnectionPool> = read_pool;
-
         let read_provider = Arc::new(SQLiteTable::new_with_schema(
-            &dyn_pool,
+            read_pool,
             Arc::clone(&schema),
             name,
         ));
@@ -396,10 +391,8 @@ impl SqliteTableFactory {
             .await
             .context(UnableToInferSchemaSnafu)?;
 
-        let dyn_pool: Arc<DynSqliteConnectionPool> = pool;
-
         let read_provider = Arc::new(SQLiteTable::new_with_schema(
-            &dyn_pool,
+            pool,
             Arc::clone(&schema),
             table_reference,
         ));
@@ -456,19 +449,8 @@ impl Sqlite {
         &self.constraints
     }
 
-    pub async fn connect(
-        &self,
-    ) -> Result<Box<dyn DbConnection<Connection, &'static (dyn ToSql + Sync)>>> {
+    pub async fn connect(&self) -> Result<<SqliteConnectionPool as DbConnectionPool>::Conn> {
         self.pool.connect().await.context(DbConnectionSnafu)
-    }
-
-    pub fn sqlite_conn<'a>(
-        db_connection: &'a mut Box<dyn DbConnection<Connection, &'static (dyn ToSql + Sync)>>,
-    ) -> Result<&'a mut SqliteConnection> {
-        db_connection
-            .as_any_mut()
-            .downcast_mut::<SqliteConnection>()
-            .ok_or_else(|| UnableToDowncastDbConnectionSnafu {}.build())
     }
 
     async fn table_exists(&self, sqlite_conn: &mut SqliteConnection) -> bool {
@@ -562,7 +544,6 @@ impl Sqlite {
         let query_result = sqlite_conn
             .query_arrow(
                 format!("PRAGMA index_list({name})", name = self.table).as_str(),
-                &[],
                 None,
             )
             .await?;
@@ -598,7 +579,6 @@ impl Sqlite {
         let query_result = sqlite_conn
             .query_arrow(
                 format!("PRAGMA table_info({name})", name = self.table).as_str(),
-                &[],
                 None,
             )
             .await?;
@@ -703,6 +683,10 @@ impl Sqlite {
         }
 
         Ok(missing_in_actual.is_empty() && extra_in_actual.is_empty())
+    }
+
+    pub fn pool(&self) -> &SqliteConnectionPool {
+        &self.pool
     }
 }
 

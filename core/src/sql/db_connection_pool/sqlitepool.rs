@@ -2,12 +2,11 @@ use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use snafu::{prelude::*, ResultExt};
-use tokio_rusqlite::{Connection, ToSql};
+use tokio_rusqlite::Connection;
 
 use super::{DbConnectionPool, Result};
 use crate::sql::db_connection_pool::{
-    dbconnection::{sqliteconn::SqliteConnection, AsyncDbConnection, DbConnection},
-    JoinPushDown, Mode,
+    dbconnection::sqliteconn::SqliteConnection, JoinPushDown, Mode,
 };
 
 #[derive(Debug, Snafu)]
@@ -209,11 +208,6 @@ impl SqliteConnectionPool {
         Ok(())
     }
 
-    #[must_use]
-    pub fn connect_sync(&self) -> Box<dyn DbConnection<Connection, &'static (dyn ToSql + Sync)>> {
-        Box::new(SqliteConnection::new(self.conn.clone()))
-    }
-
     /// Will attempt to clone the connection pool. This will always succeed for in-memory mode.
     /// For file-mode, it will attempt to create a new connection pool with the same configuration.
     ///
@@ -246,13 +240,12 @@ impl SqliteConnectionPool {
 }
 
 #[async_trait]
-impl DbConnectionPool<Connection, &'static (dyn ToSql + Sync)> for SqliteConnectionPool {
-    async fn connect(
-        &self,
-    ) -> Result<Box<dyn DbConnection<Connection, &'static (dyn ToSql + Sync)>>> {
-        let conn = self.conn.clone();
+impl DbConnectionPool for SqliteConnectionPool {
+    type Conn = SqliteConnection;
 
-        Ok(Box::new(SqliteConnection::new(conn)))
+    async fn connect(&self) -> Result<Self::Conn> {
+        let conn = self.conn.clone();
+        Ok(SqliteConnection { conn })
     }
 
     fn join_push_down(&self) -> JoinPushDown {

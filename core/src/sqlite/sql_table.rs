@@ -1,4 +1,4 @@
-use crate::sql::db_connection_pool::DbConnectionPool;
+use crate::sql::db_connection_pool::sqlitepool::SqliteConnectionPool;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::sql::unparser::dialect::SqliteDialect;
@@ -22,11 +22,11 @@ use datafusion::{
     sql::TableReference,
 };
 
-pub struct SQLiteTable<T: 'static, P: 'static> {
-    pub(crate) base_table: SqlTable<T, P>,
+pub struct SQLiteTable {
+    pub(crate) base_table: SqlTable<SqliteConnectionPool>,
 }
 
-impl<T, P> std::fmt::Debug for SQLiteTable<T, P> {
+impl std::fmt::Debug for SQLiteTable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SQLiteTable")
             .field("base_table", &self.base_table)
@@ -34,15 +34,14 @@ impl<T, P> std::fmt::Debug for SQLiteTable<T, P> {
     }
 }
 
-impl<T, P> SQLiteTable<T, P> {
+impl SQLiteTable {
     pub fn new_with_schema(
-        pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
+        pool: Arc<SqliteConnectionPool>,
         schema: impl Into<SchemaRef>,
         table_reference: impl Into<TableReference>,
     ) -> Self {
         let base_table = SqlTable::new_with_schema("sqlite", pool, schema, table_reference)
             .with_dialect(Arc::new(SqliteDialect {}));
-
         Self { base_table }
     }
 
@@ -55,14 +54,14 @@ impl<T, P> SQLiteTable<T, P> {
         Ok(Arc::new(SQLiteSqlExec::new(
             projection,
             schema,
-            self.base_table.clone_pool(),
+            self.base_table.pool().clone(),
             sql,
         )?))
     }
 }
 
 #[async_trait]
-impl<T, P> TableProvider for SQLiteTable<T, P> {
+impl TableProvider for SQLiteTable {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -94,26 +93,24 @@ impl<T, P> TableProvider for SQLiteTable<T, P> {
     }
 }
 
-impl<T, P> Display for SQLiteTable<T, P> {
+impl Display for SQLiteTable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "SQLiteTable {}", self.base_table.name())
     }
 }
 
-#[derive(Clone)]
-struct SQLiteSqlExec<T, P> {
-    base_exec: SqlExec<T, P>,
+struct SQLiteSqlExec {
+    base_exec: SqlExec<SqliteConnectionPool>,
 }
 
-impl<T, P> SQLiteSqlExec<T, P> {
+impl SQLiteSqlExec {
     fn new(
         projection: Option<&Vec<usize>>,
         schema: &SchemaRef,
-        pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
+        pool: Arc<SqliteConnectionPool>,
         sql: String,
     ) -> DataFusionResult<Self> {
         let base_exec = SqlExec::new(projection, schema, pool, sql)?;
-
         Ok(Self { base_exec })
     }
 
@@ -122,21 +119,21 @@ impl<T, P> SQLiteSqlExec<T, P> {
     }
 }
 
-impl<T, P> std::fmt::Debug for SQLiteSqlExec<T, P> {
+impl std::fmt::Debug for SQLiteSqlExec {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let sql = self.sql().unwrap_or_default();
         write!(f, "SQLiteSqlExec sql={sql}")
     }
 }
 
-impl<T, P> DisplayAs for SQLiteSqlExec<T, P> {
+impl DisplayAs for SQLiteSqlExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
         let sql = self.sql().unwrap_or_default();
         write!(f, "SQLiteSqlExec sql={sql}")
     }
 }
 
-impl<T: 'static, P: 'static> ExecutionPlan for SQLiteSqlExec<T, P> {
+impl ExecutionPlan for SQLiteSqlExec {
     fn name(&self) -> &'static str {
         "SQLiteSqlExec"
     }
@@ -172,7 +169,11 @@ impl<T: 'static, P: 'static> ExecutionPlan for SQLiteSqlExec<T, P> {
         let sql = self.sql().map_err(to_execution_error)?;
         tracing::debug!("SQLiteSqlExec sql: {sql}");
 
-        let fut = get_stream(self.base_exec.clone_pool(), sql, Arc::clone(&self.schema()));
+        let fut = get_stream(
+            self.base_exec.pool().clone(),
+            sql,
+            Arc::clone(&self.schema()),
+        );
 
         let stream = futures::stream::once(fut).try_flatten();
         let schema = Arc::clone(&self.schema());

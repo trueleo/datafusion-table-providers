@@ -1,4 +1,5 @@
 use crate::sql::db_connection_pool::dbconnection::{get_schema, Error as DbError};
+use crate::sql::db_connection_pool::DbConnectionPool;
 use crate::sql::sql_provider_datafusion::{get_stream, to_execution_error};
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -22,7 +23,7 @@ use datafusion::{
     sql::TableReference,
 };
 
-impl<T, P> SQLiteTable<T, P> {
+impl SQLiteTable {
     fn create_federated_table_source(
         self: Arc<Self>,
     ) -> DataFusionResult<Arc<dyn FederatedTableSource>> {
@@ -56,7 +57,7 @@ fn sqlite_ast_analyzer(ast: ast::Statement) -> Result<ast::Statement, DataFusion
             // iterate over the query and find any INTERVAL statements
             // find the column they target, and replace the INTERVAL and column with e.g. datetime(column, '+1 day')
             let mut interval_visitor = SQLiteIntervalVisitor::default();
-            new_query.visit(&mut interval_visitor);
+            let _ = new_query.visit(&mut interval_visitor);
 
             Ok(ast::Statement::Query(new_query))
         }
@@ -65,7 +66,7 @@ fn sqlite_ast_analyzer(ast: ast::Statement) -> Result<ast::Statement, DataFusion
 }
 
 #[async_trait]
-impl<T, P> SQLExecutor for SQLiteTable<T, P> {
+impl SQLExecutor for SQLiteTable {
     fn name(&self) -> &str {
         self.base_table.name()
     }
@@ -88,7 +89,7 @@ impl<T, P> SQLExecutor for SQLiteTable<T, P> {
         schema: SchemaRef,
     ) -> DataFusionResult<SendableRecordBatchStream> {
         let fut = get_stream(
-            self.base_table.clone_pool(),
+            self.base_table.pool().clone(),
             query.to_string(),
             Arc::clone(&schema),
         );
@@ -106,7 +107,7 @@ impl<T, P> SQLExecutor for SQLiteTable<T, P> {
     async fn get_table_schema(&self, table_name: &str) -> DataFusionResult<SchemaRef> {
         let conn = self
             .base_table
-            .clone_pool()
+            .pool()
             .connect()
             .await
             .map_err(to_execution_error)?;

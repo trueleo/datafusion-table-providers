@@ -9,11 +9,9 @@ use async_trait::async_trait;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::sql::TableReference;
-use rusqlite::ToSql;
 use snafu::prelude::*;
 use tokio_rusqlite::Connection;
 
-use super::AsyncDbConnection;
 use super::DbConnection;
 use super::Result;
 
@@ -69,24 +67,14 @@ impl SchemaValidator for SqliteConnection {
     }
 }
 
-impl DbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnection {
+#[async_trait]
+impl DbConnection for SqliteConnection {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
-    }
-
-    fn as_async(&self) -> Option<&dyn AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)>> {
-        Some(self)
-    }
-}
-
-#[async_trait]
-impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnection {
-    fn new(conn: Connection) -> Self {
-        SqliteConnection { conn }
     }
 
     async fn tables(&self, _schema: &str) -> Result<Vec<String>, super::Error> {
@@ -138,19 +126,14 @@ impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnec
     async fn query_arrow(
         &self,
         sql: &str,
-        params: &[&'static (dyn ToSql + Sync)],
         projected_schema: Option<SchemaRef>,
     ) -> Result<SendableRecordBatchStream> {
         let sql = sql.to_string();
-        let params = params.to_vec();
 
         let rec = self
             .conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(sql.as_str())?;
-                for (i, param) in params.iter().enumerate() {
-                    stmt.raw_bind_parameter(i + 1, param)?;
-                }
                 let column_count = stmt.column_count();
                 let rows = stmt.raw_query();
 
@@ -171,17 +154,12 @@ impl AsyncDbConnection<Connection, &'static (dyn ToSql + Sync)> for SqliteConnec
         Ok(Box::pin(MemoryStream::try_new(recs, schema, None)?))
     }
 
-    async fn execute(&self, sql: &str, params: &[&'static (dyn ToSql + Sync)]) -> Result<u64> {
+    async fn execute(&self, sql: &str) -> Result<u64> {
         let sql = sql.to_string();
-        let params = params.to_vec();
-
         let rows_modified = self
             .conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(sql.as_str())?;
-                for (i, param) in params.iter().enumerate() {
-                    stmt.raw_bind_parameter(i + 1, param)?;
-                }
                 let rows_modified = stmt.raw_execute()?;
                 Ok(rows_modified)
             })
