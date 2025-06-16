@@ -1,3 +1,5 @@
+use crate::sql::db_connection_pool::dbconnection::DbConnection;
+use crate::sql::db_connection_pool::DbConnectionPool;
 use crate::sql::db_connection_pool::{dbconnection::get_schema, JoinPushDown};
 use async_trait::async_trait;
 use datafusion_federation::sql::{
@@ -8,30 +10,18 @@ use futures::TryStreamExt;
 use snafu::prelude::*;
 use std::sync::Arc;
 
-use crate::sql::sql_provider_datafusion::{
-    get_stream, to_execution_error, SqlTable, UnableToGetSchemaSnafu,
-};
+use crate::sql::sql_provider_datafusion::{to_execution_error, SqlTable, UnableToGetSchemaSnafu};
 use datafusion::{
     arrow::datatypes::SchemaRef,
     error::{DataFusionError, Result as DataFusionResult},
     physical_plan::{stream::RecordBatchStreamAdapter, SendableRecordBatchStream},
-    sql::{
-        unparser::dialect::{DefaultDialect, Dialect},
-        TableReference,
-    },
+    sql::{unparser::dialect::Dialect, TableReference},
 };
 
-impl<T, P> SqlTable<T, P> {
+impl<Db: DbConnectionPool + 'static> SqlTable<Db> {
     // Return the current memory location of the object as a unique identifier
     fn unique_id(&self) -> usize {
         std::ptr::from_ref(self) as usize
-    }
-
-    fn arc_dialect(&self) -> Arc<dyn Dialect + Send + Sync> {
-        match &self.dialect {
-            Some(dialect) => Arc::clone(dialect),
-            None => Arc::new(DefaultDialect {}),
-        }
     }
 
     fn create_federated_table_source(
@@ -59,7 +49,7 @@ impl<T, P> SqlTable<T, P> {
 }
 
 #[async_trait]
-impl<T, P> SQLExecutor for SqlTable<T, P> {
+impl<Db: DbConnectionPool + 'static> SQLExecutor for SqlTable<Db> {
     fn name(&self) -> &str {
         &self.name
     }
@@ -74,7 +64,7 @@ impl<T, P> SQLExecutor for SqlTable<T, P> {
     }
 
     fn dialect(&self) -> Arc<dyn Dialect> {
-        self.arc_dialect()
+        self.dialect.clone()
     }
 
     fn execute(
@@ -82,12 +72,15 @@ impl<T, P> SQLExecutor for SqlTable<T, P> {
         query: &str,
         schema: SchemaRef,
     ) -> DataFusionResult<SendableRecordBatchStream> {
-        let fut = get_stream(
-            Arc::clone(&self.pool),
-            query.to_string(),
-            Arc::clone(&schema),
-        );
-
+        let query = query.to_owned();
+        let _schema = schema.clone();
+        let pool = self.pool.clone();
+        let fut = async move {
+            pool.connect()
+                .await?
+                .query_arrow(&query, Some(_schema))
+                .await
+        };
         let stream = futures::stream::once(fut).try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }

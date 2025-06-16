@@ -30,9 +30,9 @@ pub enum JoinPushDown {
 }
 
 #[async_trait]
-pub trait DbConnectionPool<T, P: 'static> {
-    async fn connect(&self) -> Result<Box<dyn DbConnection<T, P>>>;
-
+pub trait DbConnectionPool: Send + Sync {
+    type Conn: DbConnection;
+    async fn connect(&self) -> Result<Self::Conn>;
     fn join_push_down(&self) -> JoinPushDown;
 }
 

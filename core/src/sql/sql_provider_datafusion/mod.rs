@@ -61,15 +61,15 @@ pub enum Error {
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[derive(Clone)]
-pub struct SqlTable<T: 'static, P: 'static> {
+pub struct SqlTable<Db> {
     name: String,
-    pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
+    pool: Arc<Db>,
     schema: SchemaRef,
     pub table_reference: TableReference,
-    dialect: Option<Arc<dyn Dialect + Send + Sync>>,
+    dialect: Arc<dyn Dialect + Send + Sync>,
 }
 
-impl<T, P> fmt::Debug for SqlTable<T, P> {
+impl<Db> fmt::Debug for SqlTable<Db> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("SqlTable")
             .field("name", &self.name)
@@ -79,10 +79,10 @@ impl<T, P> fmt::Debug for SqlTable<T, P> {
     }
 }
 
-impl<T, P> SqlTable<T, P> {
+impl<Db: DbConnectionPool + 'static> SqlTable<Db> {
     pub async fn new(
         name: &str,
-        pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
+        pool: Arc<Db>,
         table_reference: impl Into<TableReference>,
     ) -> Result<Self> {
         let table_reference = table_reference.into();
@@ -100,16 +100,16 @@ impl<T, P> SqlTable<T, P> {
 
     pub fn new_with_schema(
         name: &str,
-        pool: &Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
+        pool: Arc<Db>,
         schema: impl Into<SchemaRef>,
         table_reference: impl Into<TableReference>,
     ) -> Self {
         Self {
             name: name.to_owned(),
-            pool: Arc::clone(pool),
+            pool: pool,
             schema: schema.into(),
             table_reference: table_reference.into(),
-            dialect: None,
+            dialect: Arc::new(DefaultDialect {}),
         }
     }
 
@@ -158,11 +158,9 @@ impl<T, P> SqlTable<T, P> {
     }
 
     #[must_use]
-    pub fn with_dialect(self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
-        Self {
-            dialect: Some(dialect),
-            ..self
-        }
+    pub fn with_dialect(mut self, dialect: Arc<dyn Dialect + Send + Sync>) -> Self {
+        self.dialect = dialect;
+        self
     }
 
     #[must_use]
@@ -170,21 +168,17 @@ impl<T, P> SqlTable<T, P> {
         &self.name
     }
 
-    #[must_use]
-    pub fn clone_pool(&self) -> Arc<dyn DbConnectionPool<T, P> + Send + Sync> {
-        Arc::clone(&self.pool)
+    fn dialect(&self) -> &dyn Dialect {
+        &*self.dialect
     }
 
-    fn dialect(&self) -> &(dyn Dialect + Send + Sync) {
-        match &self.dialect {
-            Some(dialect) => dialect.as_ref(),
-            None => &DefaultDialect {},
-        }
+    pub fn pool(&self) -> &Arc<Db> {
+        &self.pool
     }
 }
 
 #[async_trait]
-impl<T, P> TableProvider for SqlTable<T, P> {
+impl<Db: DbConnectionPool + 'static> TableProvider for SqlTable<Db> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -229,7 +223,7 @@ impl<T, P> TableProvider for SqlTable<T, P> {
     }
 }
 
-impl<T, P> Display for SqlTable<T, P> {
+impl<T> Display for SqlTable<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "SqlTable {}", self.name)
     }
@@ -259,18 +253,18 @@ pub fn project_schema_safe(
 }
 
 #[derive(Clone)]
-pub struct SqlExec<T, P> {
+pub struct SqlExec<Db> {
     projected_schema: SchemaRef,
-    pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
+    pool: Arc<Db>,
     sql: String,
     properties: PlanProperties,
 }
 
-impl<T, P> SqlExec<T, P> {
+impl<Db: DbConnectionPool + 'static> SqlExec<Db> {
     pub fn new(
         projection: Option<&Vec<usize>>,
         schema: &SchemaRef,
-        pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
+        pool: Arc<Db>,
         sql: String,
     ) -> DataFusionResult<Self> {
         let projected_schema = project_schema_safe(schema, projection)?;
@@ -288,31 +282,30 @@ impl<T, P> SqlExec<T, P> {
         })
     }
 
-    #[must_use]
-    pub fn clone_pool(&self) -> Arc<dyn DbConnectionPool<T, P> + Send + Sync> {
-        Arc::clone(&self.pool)
-    }
-
     pub fn sql(&self) -> Result<String> {
         Ok(self.sql.clone())
     }
+
+    pub fn pool(&self) -> &Arc<Db> {
+        &self.pool
+    }
 }
 
-impl<T, P> std::fmt::Debug for SqlExec<T, P> {
+impl<Db: DbConnectionPool + 'static> std::fmt::Debug for SqlExec<Db> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let sql = self.sql().unwrap_or_default();
         write!(f, "SqlExec sql={sql}")
     }
 }
 
-impl<T, P> DisplayAs for SqlExec<T, P> {
+impl<Db: DbConnectionPool + 'static> DisplayAs for SqlExec<Db> {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
         let sql = self.sql().unwrap_or_default();
         write!(f, "SqlExec sql={sql}")
     }
 }
 
-impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
+impl<Db: DbConnectionPool + 'static> ExecutionPlan for SqlExec<Db> {
     fn name(&self) -> &'static str {
         "SqlExec"
     }
@@ -357,13 +350,12 @@ impl<T: 'static, P: 'static> ExecutionPlan for SqlExec<T, P> {
     }
 }
 
-pub async fn get_stream<T: 'static, P: 'static>(
-    pool: Arc<dyn DbConnectionPool<T, P> + Send + Sync>,
+pub async fn get_stream<Db: DbConnectionPool + 'static>(
+    pool: Arc<Db>,
     sql: String,
     projected_schema: SchemaRef,
 ) -> DataFusionResult<SendableRecordBatchStream> {
     let conn = pool.connect().await.map_err(to_execution_error)?;
-
     query_arrow(conn, sql, Some(projected_schema))
         .await
         .map_err(to_execution_error)
@@ -413,28 +405,47 @@ mod tests {
         use super::*;
 
         struct MockConn {}
+        #[async_trait::async_trait]
+        pub trait DbConnection: Send {
+            fn as_any(&self) -> &dyn Any;
+            fn as_any_mut(&mut self) -> &mut dyn Any;
 
-        impl DbConnection<(), &'static dyn ToString> for MockConn {
-            fn as_any(&self) -> &dyn Any {
-                self
+            async fn tables(&self, schema: &str) -> Result<Vec<String>, Error> {
+                unimplemented!()
             }
 
-            fn as_any_mut(&mut self) -> &mut dyn Any {
-                self
+            async fn schemas(&self) -> Result<Vec<String>, Error> {
+                unimplemented!()
+            }
+
+            async fn get_schema(
+                &self,
+                table_reference: &TableReference,
+            ) -> Result<SchemaRef, Error> {
+                unimplemented!()
+            }
+
+            async fn query_arrow(
+                &self,
+                sql: &str,
+                projected_schema: Option<SchemaRef>,
+            ) -> Result<SendableRecordBatchStream> {
+                unimplemented!()
+            }
+
+            async fn execute(&self, sql: &str) -> Result<u64> {
+                unimplemented!()
             }
         }
 
         struct MockDBPool {}
 
         #[async_trait]
-        impl DbConnectionPool<(), &'static dyn ToString> for MockDBPool {
-            async fn connect(
-                &self,
-            ) -> Result<
-                Box<dyn DbConnection<(), &'static dyn ToString>>,
-                Box<dyn Error + Send + Sync>,
-            > {
-                Ok(Box::new(MockConn {}))
+        impl DbConnectionPool for MockDBPool {
+            type Conn = MockConn;
+
+            async fn connect(&self) -> Result<MockConn, Box<dyn Error + Send + Sync>> {
+                Ok(MockConn {})
             }
 
             fn join_push_down(&self) -> JoinPushDown {

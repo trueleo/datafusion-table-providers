@@ -12,7 +12,6 @@ use datafusion::{
 };
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
-type Pool<T, P> = Arc<dyn DbConnectionPool<T, P> + Send + Sync>;
 
 #[derive(Debug)]
 pub struct DatabaseCatalogProvider {
@@ -20,7 +19,7 @@ pub struct DatabaseCatalogProvider {
 }
 
 impl DatabaseCatalogProvider {
-    pub async fn try_new<T: 'static, P: 'static>(pool: Pool<T, P>) -> Result<Self> {
+    pub async fn try_new<Db: DbConnectionPool + 'static>(pool: Arc<Db>) -> Result<Self> {
         let conn = pool.connect().await?;
 
         let schemas = get_schemas(conn).await?;
@@ -51,20 +50,20 @@ impl CatalogProvider for DatabaseCatalogProvider {
     }
 }
 
-pub struct DatabaseSchemaProvider<T, P> {
+pub struct DatabaseSchemaProvider<Db> {
     name: String,
     tables: Vec<String>,
-    pool: Pool<T, P>,
+    pool: Arc<Db>,
 }
 
-impl<T, P> std::fmt::Debug for DatabaseSchemaProvider<T, P> {
+impl<Db> std::fmt::Debug for DatabaseSchemaProvider<Db> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "DatabaseSchemaProvider {{ name: {:?} }}", self.name)
     }
 }
 
-impl<T, P: 'static> DatabaseSchemaProvider<T, P> {
-    pub async fn try_new(name: String, pool: Pool<T, P>) -> Result<Self> {
+impl<Db: DbConnectionPool> DatabaseSchemaProvider<Db> {
+    pub async fn try_new(name: String, pool: Arc<Db>) -> Result<Self> {
         let conn = pool.connect().await?;
         let tables = get_tables(conn, &name).await?;
 
@@ -73,7 +72,7 @@ impl<T, P: 'static> DatabaseSchemaProvider<T, P> {
 }
 
 #[async_trait]
-impl<T: 'static, P: 'static> SchemaProvider for DatabaseSchemaProvider<T, P> {
+impl<Db: DbConnectionPool + 'static> SchemaProvider for DatabaseSchemaProvider<Db> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -86,7 +85,7 @@ impl<T: 'static, P: 'static> SchemaProvider for DatabaseSchemaProvider<T, P> {
         if self.table_exist(table) {
             SqlTable::new(
                 &self.name,
-                &self.pool,
+                self.pool.clone(),
                 TableReference::partial(self.name.clone(), table.to_string()),
             )
             .await
