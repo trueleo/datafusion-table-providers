@@ -28,6 +28,8 @@ impl RawTableProvider {
     }
 }
 
+#[cfg(feature = "clickhouse")]
+pub mod clickhouse;
 #[cfg(feature = "duckdb")]
 pub mod duckdb;
 #[cfg(feature = "flight")]
@@ -87,6 +89,13 @@ fn _internal(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
         let flight = PyModule::new(py, "flight")?;
         flight::init_module(&flight)?;
         m.add_submodule(&flight)?;
+    }
+
+    #[cfg(feature = "clickhouse")]
+    {
+        let clickhouse = PyModule::new(py, "clickhouse")?;
+        clickhouse::init_module(&clickhouse)?;
+        m.add_submodule(&clickhouse)?;
     }
 
     Ok(())
