@@ -25,7 +25,7 @@ class ClickHouseTableFactory:
 
     def __init__(self, params: dict) -> None:
         """Create a ClickHouse table factory."""
-        self._raw = _internal.postgres.RawClickHouseTableFactory(params)
+        self._raw = _internal.clickhouse.RawClickHouseTableFactory(params)
 
     def tables(self) -> List[str]:
         """Get all the table names."""
