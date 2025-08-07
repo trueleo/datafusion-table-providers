@@ -6,7 +6,7 @@ connection_param = {
     "url": "http://localhost:8123",
     "database": "default",
     "user": "user",
-    "password": "secret",
+    "password": "secret"
 }
 pool = clickhouse.ClickHouseTableFactory(connection_param)
 tables = pool.tables()
